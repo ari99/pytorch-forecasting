@@ -971,7 +971,8 @@ class TimeSeriesDataSet(Dataset):
 
         # categorical covariates
         categorical = check_for_nonfinite(
-            torch.tensor(data[self.flat_categoricals].to_numpy(np.int64), dtype=torch.int64), self.flat_categoricals
+            # this needed to be changed from int64 to int32 for the failing test test_nhits.test_integration
+            torch.tensor(data[self.flat_categoricals].to_numpy(np.int32), dtype=torch.int32), self.flat_categoricals
         )
 
         # get weight

@@ -94,10 +94,12 @@ def test_integration(
     dataloader,
 ):
     kwargs = {}
+    original_dataloader = dataloader
+    print("-----------start dataloader " + dataloader)
     if dataloader == "with_covariates":
         dataloader = dataloaders_with_covariates
         kwargs["backcast_loss_ratio"] = 0.5
-    elif dataloader == "different_encoder_decoder_size":
+    elif dataloader == "different_encoder_decoder_size": # this one has int64 errors
         dataloader = dataloaders_with_different_encoder_decoder_length
     elif dataloader == "fixed_window_without_covariates":
         dataloader = dataloaders_fixed_window_without_covariates
@@ -118,7 +120,7 @@ def test_integration(
     else:
         raise ValueError(f"dataloader {dataloader} unknown")
     _integration(dataloader, tmp_path=tmp_path, **kwargs)
-
+    print("----- end dataloader " + original_dataloader )
 
 @pytest.fixture(scope="session")
 def model(dataloaders_with_covariates):
