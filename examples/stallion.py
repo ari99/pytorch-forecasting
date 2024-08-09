@@ -8,7 +8,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.tuner import Tuner
 import numpy as np
 import pandas as pd
-from pandas.core.common import SettingWithCopyWarning
+from pandas.errors import SettingWithCopyWarning
 import torch
 
 from pytorch_forecasting import GroupNormalizer, TemporalFusionTransformer, TimeSeriesDataSet
@@ -85,17 +85,17 @@ training = TimeSeriesDataSet(
 
 validation = TimeSeriesDataSet.from_dataset(training, data, predict=True, stop_randomization=True)
 batch_size = 64
-train_dataloader = training.to_dataloader(train=True, batch_size=batch_size, num_workers=0)
-val_dataloader = validation.to_dataloader(train=False, batch_size=batch_size, num_workers=0)
+train_dataloader = training.to_dataloader(train=True, batch_size=batch_size, num_workers=9) # num_workers=0
+val_dataloader = validation.to_dataloader(train=False, batch_size=batch_size, num_workers=9) # num_workers=0
 
 
 # save datasets
-training.save("t raining.pkl")
+training.save("training.pkl")
 validation.save("validation.pkl")
 
 early_stop_callback = EarlyStopping(monitor="val_loss", min_delta=1e-4, patience=10, verbose=False, mode="min")
 lr_logger = LearningRateMonitor()
-logger = TensorBoardLogger(log_graph=True)
+logger = TensorBoardLogger("./logs", log_graph=True)
 
 trainer = pl.Trainer(
     max_epochs=100,

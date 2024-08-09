@@ -121,7 +121,9 @@ def optimize_hyperparameters(
 
         learning_rate_callback = LearningRateMonitor()
         logger = TensorBoardLogger(log_dir, name="optuna", version=trial.number)
-        gradient_clip_val = trial.suggest_loguniform("gradient_clip_val", *gradient_clip_val_range)
+        #gradient_clip_val = trial.suggest_loguniform("gradient_clip_val", *gradient_clip_val_range)
+        gradient_clip_val = trial.suggest_float("gradient_clip_val", *gradient_clip_val_range, log=True)
+
         default_trainer_kwargs = dict(
             accelerator="auto",
             max_epochs=max_epochs,
@@ -145,7 +147,8 @@ def optimize_hyperparameters(
         kwargs["loss"] = copy.deepcopy(loss)
         model = TemporalFusionTransformer.from_dataset(
             train_dataloaders.dataset,
-            dropout=trial.suggest_uniform("dropout", *dropout_range),
+            #dropout=trial.suggest_uniform("dropout", *dropout_range),
+            dropout=trial.suggest_float("dropout", *dropout_range),
             hidden_size=hidden_size,
             hidden_continuous_size=trial.suggest_int(
                 "hidden_continuous_size",
@@ -191,9 +194,11 @@ def optimize_hyperparameters(
                 optimal_lr = res.results["lr"][optimal_idx]
             optuna_logger.info(f"Using learning rate of {optimal_lr:.3g}")
             # add learning rate artificially
-            model.hparams.learning_rate = trial.suggest_uniform("learning_rate", optimal_lr, optimal_lr)
+            #model.hparams.learning_rate = trial.suggest_uniform("learning_rate", optimal_lr, optimal_lr)
+            model.hparams.learning_rate = trial.suggest_float("learning_rate", optimal_lr, optimal_lr)
         else:
-            model.hparams.learning_rate = trial.suggest_loguniform("learning_rate", *learning_rate_range)
+            #model.hparams.learning_rate = trial.suggest_loguniform("learning_rate", *learning_rate_range)
+            model.hparams.learning_rate = trial.suggest_float("learning_rate", *learning_rate_range, log=True)
 
         # fit
         trainer.fit(model, train_dataloaders=train_dataloaders, val_dataloaders=val_dataloaders)
