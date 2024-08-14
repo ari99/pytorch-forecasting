@@ -19,12 +19,21 @@ from pytorch_forecasting.data.examples import get_stallion_data
 from pytorch_forecasting.metrics import MAE, RMSE, SMAPE, PoissonLoss, QuantileLoss
 from pytorch_forecasting.models.temporal_fusion_transformer.tuning import optimize_hyperparameters
 from pytorch_forecasting.utils import profile
+import logging
+# setting log level to debug sets outputs  a lot from the imported libraries
+logging.basicConfig(level=logging.INFO)
 
 warnings.simplefilter("error", category=SettingWithCopyWarning)
 
 if __name__ == "__main__":
-    data = get_stallion_data()
+    # Set the number of intra-op threads (e.g., for matrix multiplications)
+    torch.set_num_threads(10)
 
+    # Set the number of inter-op threads (e.g., for parallel operations)
+    torch.set_num_interop_threads(8)
+
+    data = get_stallion_data()
+    logging.info("--Read stallion data from parquet")
     data["month"] = data.date.dt.month.astype("str").astype("category")
     data["log_volume"] = np.log(data.volume + 1e-8)
 
@@ -52,7 +61,7 @@ if __name__ == "__main__":
     training_cutoff = data["time_idx"].max() - 6
     max_encoder_length = 36
     max_prediction_length = 6
-
+    logging.info(" Finished altering data")
     training = TimeSeriesDataSet(
         data[lambda x: x.time_idx <= training_cutoff],
         time_idx="time_idx",
@@ -85,34 +94,29 @@ if __name__ == "__main__":
         add_encoder_length=True,
     )
 
+    logging.info("--Training TimeSeriesDataSet ")
 
     validation = TimeSeriesDataSet.from_dataset(training, data, predict=True, stop_randomization=True)
     batch_size = 64
-    train_dataloader = training.to_dataloader(train=True, batch_size=batch_size, num_workers=9) # num_workers=0
-    val_dataloader = validation.to_dataloader(train=False, batch_size=batch_size, num_workers=9) # num_workers=0
+    train_dataloader = training.to_dataloader(train=True, batch_size=batch_size,
+                                              num_workers=12, pin_memory=True, persistent_workers=True) # num_workers=0
+    val_dataloader = validation.to_dataloader(train=False, batch_size=batch_size,
+                                              num_workers=12, pin_memory=True, persistent_workers=True) # num_workers=0
+
+    logging.info("--Created dataloader ")
 
 
     # save datasets
     training.save("training.pkl")
     validation.save("validation.pkl")
-
+    logging.info("--Saved training and validation TimeSeriesDataSet")
     early_stop_callback = EarlyStopping(monitor="val_loss", min_delta=1e-4, patience=10, verbose=False, mode="min")
     lr_logger = LearningRateMonitor()
     logger = TensorBoardLogger("./logs", log_graph=True)
+    logging.info("--logger created")
 
-    trainer = pl.Trainer(
-        max_epochs=100,
-        accelerator="auto",
-        gradient_clip_val=0.1,
-        limit_train_batches=30,
-        # val_check_interval=20,
-        # limit_val_batches=1,
-        # fast_dev_run=True,
-        logger=logger,
-        # profiler=True,
-        callbacks=[lr_logger, early_stop_callback],
-    )
 
+    logging.info("--trainer created")
 
     tft = TemporalFusionTransformer.from_dataset(
         training,
@@ -127,10 +131,28 @@ if __name__ == "__main__":
         log_val_interval=1,
         reduce_on_plateau_patience=3,
     )
-    print(f"Number of parameters in network: {tft.size()/1e3:.1f}k")
+    logging.info("--TemporalFusionTransformer created")
 
+    logging.info(f"--Number of parameters in network: {tft.size()/1e3:.1f}k")
+
+    #####
+    # START : This section is for finding learning rate using PyTorch learning rate finder. The other option
+    # provided below is to use optuna.
+    ######
     # # find optimal learning rate
     # # remove logging and artificial epoch size
+    #trainer = pl.Trainer(
+    #    max_epochs=100,
+    #    accelerator="auto",
+    #    gradient_clip_val=0.1,
+    #    limit_train_batches=30,
+        # val_check_interval=20,
+        # limit_val_batches=1,
+        # fast_dev_run=True,
+    #    logger=logger,
+        # profiler=True,
+    #    callbacks=[lr_logger, early_stop_callback],
+    #)
     # tft.hparams.log_interval = -1
     # tft.hparams.log_val_interval = -1
     # trainer.limit_train_batches = 1.0
@@ -149,17 +171,24 @@ if __name__ == "__main__":
     #     val_dataloaders=val_dataloader,
     # )
 
+    #####
+    # END: section  for finding learning rate using PyTorch learning rate finder
+    ######
+
+    ###
+    # Start section for finding optimal params using optuna instead of PyTorch learning rate finder
+    ###
     # # make a prediction on entire validation set
     # preds, index = tft.predict(val_dataloader, return_index=True, fast_dev_run=True)
-
-
-    # tune
+    num_trials = 10 # was 200
+    logging.info("--starting parameter optimization - num trials " + str(num_trials))
+    # tune , view optuna dashboard using  optuna-dashboard sqlite:///optuna-dashboard/db.sqlite3 from the examples dir
     study = optimize_hyperparameters(
         train_dataloader,
         val_dataloader,
         model_path="optuna_test",
-        n_trials=200,
-        max_epochs=50,
+        n_trials=num_trials,
+        max_epochs=10, # changed from 50
         gradient_clip_val_range=(0.01, 1.0),
         hidden_size_range=(8, 128),
         hidden_continuous_size_range=(8, 128),
@@ -169,10 +198,17 @@ if __name__ == "__main__":
         trainer_kwargs=dict(limit_train_batches=30),
         reduce_on_plateau_patience=4,
         use_learning_rate_finder=False,
+        study_name="stallion_study",
+        verbose=2
     )
     with open("test_study.pkl", "wb") as fout:
         pickle.dump(study, fout)
 
+    logging.info("--ending  tuning")
+
+    # show best hyperparameters
+    logging.info("========== Optuna study  best params")
+    logging.info(study.best_trial.params)
 
     # profile speed
     # profile(

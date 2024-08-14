@@ -4,6 +4,7 @@ Hyperparameters can be efficiently tuned with `optuna <https://optuna.readthedoc
 import copy
 import logging
 import os
+import string
 from typing import Any, Dict, Tuple, Union
 
 import lightning.pytorch as pl
@@ -46,9 +47,11 @@ def optimize_hyperparameters(
     use_learning_rate_finder: bool = True,
     trainer_kwargs: Dict[str, Any] = {},
     log_dir: str = "lightning_logs",
+    study_name: Union[str, None] = None,
     study: optuna.Study = None,
     verbose: Union[int, bool] = None,
     pruner: optuna.pruners.BasePruner = optuna.pruners.SuccessiveHalvingPruner(),
+    load_optuna_study: bool = True,
     **kwargs,
 ) -> optuna.Study:
     """
@@ -95,10 +98,13 @@ def optimize_hyperparameters(
     Returns:
         optuna.Study: optuna study results
     """
+    # assure train and validation dataloaders are TimeSeriesDataSet
     assert isinstance(train_dataloaders.dataset, TimeSeriesDataSet) and isinstance(
         val_dataloaders.dataset, TimeSeriesDataSet
     ), "dataloaders must be built from timeseriesdataset"
 
+    # TODO refactor from map to optuna.logging type param
+    # this is used to map bool or number param to optuna.logging
     logging_level = {
         None: optuna.logging.get_verbosity(),
         0: optuna.logging.WARNING,
@@ -109,18 +115,24 @@ def optimize_hyperparameters(
     optuna.logging.set_verbosity(optuna_verbose)
 
     loss = kwargs.get(
-        "loss", QuantileLoss()
+        "loss", QuantileLoss() # defaults to QuantileLoss()
     )  # need a deepcopy of loss as it will otherwise propagate from one trial to the next
 
     # create objective function
     def objective(trial: optuna.Trial) -> float:
         # Filenames for each trial must be made unique in order to access each checkpoint.
+        logging.info(f"======== Starting optuna trial number {trial.number}")
+        modelCheckPointDirPath: string = os.path.join(model_path, "trial_{}".format(trial.number))
+        logging.info("--model checkpoint dir: {}".format(modelCheckPointDirPath))
         checkpoint_callback = ModelCheckpoint(
-            dirpath=os.path.join(model_path, "trial_{}".format(trial.number)), filename="{epoch}", monitor="val_loss"
+            dirpath=modelCheckPointDirPath, filename="{epoch}", monitor="val_loss",
+            verbose=True, save_top_k=3
         )
 
         learning_rate_callback = LearningRateMonitor()
+
         logger = TensorBoardLogger(log_dir, name="optuna", version=trial.number)
+        logging.info("Created logger in dir " + log_dir + " trial number " + str(trial.number))
         #gradient_clip_val = trial.suggest_loguniform("gradient_clip_val", *gradient_clip_val_range)
         gradient_clip_val = trial.suggest_float("gradient_clip_val", *gradient_clip_val_range, log=True)
 
@@ -136,6 +148,7 @@ def optimize_hyperparameters(
             logger=logger,
             enable_progress_bar=optuna_verbose < optuna.logging.INFO,
             enable_model_summary=[False, True][optuna_verbose < optuna.logging.INFO],
+            log_every_n_steps=20,
         )
         default_trainer_kwargs.update(trainer_kwargs)
         trainer = pl.Trainer(
@@ -206,8 +219,17 @@ def optimize_hyperparameters(
         # report result
         return trainer.callback_metrics["val_loss"].item()
 
+    os.makedirs("optuna-dashboard", exist_ok=True)
     # setup optuna and run
     if study is None:
-        study = optuna.create_study(direction="minimize", pruner=pruner)
+        logging.info("-- creating new optuna study because study param is none")
+        study = optuna.create_study(direction="minimize",
+                                    study_name=study_name,
+                                    pruner=pruner,
+                                    storage="sqlite:///optuna-dashboard/db.sqlite3",
+                                    load_if_exists=load_optuna_study)
+    else:
+        logging.info("-- using existing study")
+    logging.info("-- starting optimize")
     study.optimize(objective, n_trials=n_trials, timeout=timeout)
     return study
