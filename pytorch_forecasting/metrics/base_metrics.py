@@ -17,7 +17,7 @@ from pytorch_forecasting.utils import create_mask, unpack_sequence, unsqueeze_li
 class Metric(LightningMetric):
     """
     Base metric class that has basic functions that can handle predicting quantiles and operate in log space.
-    See the `Lightning documentation <https://pytorch-lightning.readthedocs.io/en/latest/metrics.html>`_
+    See the `Lightning documentation <https://lightning.ai/docs/torchmetrics/stable/pages/implement.html#implement>`_
     for details of how to implement a new metric
 
     Other metrics should inherit from this base class
@@ -295,6 +295,7 @@ class MultiLoss(LightningMetric):
         """
         for idx, metric in enumerate(self.metrics):
             try:
+                #print("111 FINDING WHATS CALLING UPDATE Y_PRED[IDX] " + str(y_pred[idx]))
                 metric.update(
                     y_pred[idx],
                     (y_actual[0][idx], y_actual[1]),
@@ -304,6 +305,7 @@ class MultiLoss(LightningMetric):
                     },
                 )
             except TypeError:  # silently update without kwargs if not supported
+                #print("222 FINDING WHATS CALLING UPDATE Y_PRED[IDX] " + str(y_pred[idx]))
                 metric.update(y_pred[idx], (y_actual[0][idx], y_actual[1]))
 
     def compute(self) -> torch.Tensor:
@@ -663,6 +665,7 @@ class AggregationMetric(Metric):
         """
         y_pred_mean, y_mean = self._calculate_mean(y_pred, y_actual)
         # update metric. unsqueeze first batch dimension (as batches are collapsed)
+        #print("333333  HERE")
         self.metric.update(y_pred_mean, y_mean, **kwargs)
 
     @staticmethod
@@ -780,7 +783,7 @@ class MultiHorizonMetric(Metric):
             target, lengths = unpack_sequence(target)
         else:
             lengths = torch.full((target.size(0),), fill_value=target.size(1), dtype=torch.long, device=target.device)
-
+        #print(" HERE  y_pred type " + str(type(y_pred)) + " shape " + str(y_pred.shape) + " " +str(y_pred.view(-1)[:10]) )
         losses = self.loss(y_pred, target)
         # weight samples
         if weight is not None:

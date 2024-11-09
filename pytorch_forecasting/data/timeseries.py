@@ -572,6 +572,7 @@ class TimeSeriesDataSet(Dataset):
                 else:
                     data_positive = (data[target] > 0).all()
                     if data_positive:
+                        print("ALL DATA IS POSITIVE")
                         if data[target].skew() > 2.5:
                             transformer = "log"
                         else:
@@ -579,10 +580,13 @@ class TimeSeriesDataSet(Dataset):
                     else:
                         transformer = None
                     if self.max_encoder_length > 20 and self.min_encoder_length > 1:
+                        print("USING ENCODER NORMALIZER")
                         normalizers.append(EncoderNormalizer(transformation=transformer))
                     else:
+                        print("USING GroupNormalizer")
                         normalizers.append(GroupNormalizer(transformation=transformer))
             if self.multi_target:
+                print("USING MultiNormalizer")
                 self.target_normalizer = MultiNormalizer(normalizers)
             else:
                 self.target_normalizer = normalizers[0]
@@ -601,6 +605,7 @@ class TimeSeriesDataSet(Dataset):
             "multiple targets / list of targets requires MultiNormalizer as target_normalizer "
             f"but found {self.target_normalizer}"
         )
+        print("TYPE of normalizer " + str(type(self.target_normalizer)))
 
     @property
     @lru_cache(None)

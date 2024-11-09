@@ -200,6 +200,7 @@ class PredictCallback(BasePredictionWriter):
         self.predict_kwargs = predict_kwargs if predict_kwargs is not None else {}
         self.output_dir = output_dir
         self._reset_data()
+        self._num_batches = 0
 
     def _reset_data(self, result: bool = True):
         # reset data objects to save results into
@@ -220,14 +221,25 @@ class PredictCallback(BasePredictionWriter):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
+        self._num_batches += 1
+        #print(' ----------- in on_predict_batch_end ' + str(self._num_batches))
+        #print("len y=batch[1] " + str(len(batch[1])))
+        #print("y=batch[1] batch[1][0].shape " + str(batch[1][0].shape))
+        #print("!!!!!! y=batch[1] batch[1][0] values " + str(batch[1][0]))
+        #print("batch[1][1] " + str(batch[1][1]))
         # extract predictions form output
         x = batch[0]
-        out = outputs
+        #print('x.keys (batch[0]) ' + str(x.keys()))
+        #print('x.decoder_time_idx ' + str(x['decoder_time_idx']))
 
+        out = outputs
+        #print("out.prediction.shape " + str(out.prediction.shape))
+        #print("!!!!! out.prediction values " + str(out.prediction))
         lengths = x["decoder_lengths"]
 
         nan_mask = create_mask(lengths.max(), lengths)
         if isinstance(self.mode, (tuple, list)):
+            print("tuple or list")
             if self.mode[0] == "raw":
                 out = out[self.mode[1]]
             else:
@@ -235,6 +247,8 @@ class PredictCallback(BasePredictionWriter):
                     f"If a tuple is specified, the first element must be 'raw' - got {self.mode[0]} instead"
                 )
         elif self.mode == "prediction":
+            #print("mode prediction")
+
             out = pl_module.to_prediction(out, **self.mode_kwargs)
             # mask non-predictions
             if isinstance(out, (list, tuple)):
@@ -244,6 +258,8 @@ class PredictCallback(BasePredictionWriter):
             elif out.dtype == torch.float:  # only floats can be filled with nans
                 out = out.masked_fill(nan_mask, torch.tensor(float("nan")))
         elif self.mode == "quantiles":
+            print("mode quantiles")
+
             out = pl_module.to_quantiles(out, **self.mode_kwargs)
             # mask non-predictions
             if isinstance(out, (list, tuple)):
@@ -259,6 +275,13 @@ class PredictCallback(BasePredictionWriter):
             raise ValueError(f"Unknown mode {self.mode} - see docs for valid arguments")
 
         self._output.append(out)
+        #print("self._output len " + str(len(selxf._output)))
+        #print("self._output type " + str(type(self._output)))
+        #print("self._output[0] type " + str(type(self._output[0])))
+        # when mode is raw self._output[0] type  is <class 'pytorch_forecasting.utils.TupleOutputMixIn.to_network_output.<locals>.Output'>
+        #if isinstance(self._output[0], torch.Tensor):
+            #print("self._output[0].shape " + str(self._output[0].shape))
+
         out = dict(output=out)
         if self.return_x:
             self._x_list.append(x)
@@ -272,6 +295,15 @@ class PredictCallback(BasePredictionWriter):
         if self.return_y:
             self._y.append(batch[1])
             out["y"] = self._y[-1]
+            #self._y is a list of tuples, a tuple gets added each batch run. the tuple is (a tensor [32,6], None) if your
+            # batch size is 32 and you are predicting 6 ahead
+            #print("self._y len " + str(len(self._y)))
+            #print("self._y[0] len " + str(len(self._y[0])))
+            #print("!!!!! self._y[0][0] first 0 is list second is tuple  " + str(self._y[0][0].shape))
+            #if len(self._y) >= 2:
+            #    print("!!!!! self._y[1][0] first 0 is list second is tuple  " + str(self._y[1][0].shape))
+
+            #print("!!!!!! self._y[0], second index has value None  " + str(self._y[0]))
 
         if isinstance(out, dict):
             out = Prediction(**out)
@@ -288,6 +320,8 @@ class PredictCallback(BasePredictionWriter):
         self._reset_data()
 
     def on_predict_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        #print(" ####################### in on_predict_epoch_end with len of output " + str(len(self._output)))
+        #this is after all the batches have been run
         output = self._output
         if len(output) > 0:
             # concatenate output (of different batches)
@@ -320,6 +354,8 @@ class PredictCallback(BasePredictionWriter):
                 else:
                     weight = concat_sequences([yi[1] for yi in self._y])
 
+                print(" type(y) in epoch end " + str(type(y)))
+                print(" shape(y) in epoch end " + str(y.shape))
                 output["y"] = (y, weight)
             if isinstance(output, dict):
                 output = Prediction(**output)  # save for later writing or outputting
@@ -1452,6 +1488,8 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
                 * "series": values are average prediction and index are probed values
                 * "dataframe": columns are as obtained by the `dataset.x_to_index()` method,
                     prediction (which is the mean prediction over the time horizon),
+                    normalized_prediction (which are predictions devided by the prediction for the first probed value)
+                    normalized_prediction (which are predictions devided by the prediction for the first probed value)
                     normalized_prediction (which are predictions devided by the prediction for the first probed value)
                     the variable name for the probed values
                 * "raw": outputs a tensor of shape len(values) x prediction_shape
