@@ -1,22 +1,16 @@
-from pathlib import Path
-import pickle
 import warnings
 
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
-from lightning.pytorch.loggers import TensorBoardLogger
-from lightning.pytorch.tuner import Tuner
-import numpy as np
 import pandas as pd
 from pandas.core.common import SettingWithCopyWarning
 import torch
 
-from pytorch_forecasting import EncoderNormalizer, GroupNormalizer, TimeSeriesDataSet
+from pytorch_forecasting import GroupNormalizer, TimeSeriesDataSet
 from pytorch_forecasting.data import NaNLabelEncoder
 from pytorch_forecasting.data.examples import generate_ar_data
 from pytorch_forecasting.metrics import NormalDistributionLoss
 from pytorch_forecasting.models.deepar import DeepAR
-from pytorch_forecasting.utils import profile
 
 warnings.simplefilter("error", category=SettingWithCopyWarning)
 
@@ -91,7 +85,7 @@ deepar = DeepAR.from_dataset(
     log_val_interval=3,
     # reduce_on_plateau_patience=3,
 )
-print(f"Number of parameters in network: {deepar.size()/1e3:.1f}k")
+print(f"Number of parameters in network: {deepar.size() / 1e3:.1f}k")
 
 # # find optimal learning rate
 # deepar.hparams.log_interval = -1

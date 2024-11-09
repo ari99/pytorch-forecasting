@@ -1,8 +1,8 @@
 """
 Timeseries models share a number of common characteristics. This module implements these in a common base class.
 """
+
 from collections import namedtuple
-import copy
 from copy import deepcopy
 import inspect
 import logging
@@ -14,13 +14,10 @@ import lightning.pytorch as pl
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import BasePredictionWriter, LearningRateFinder
 from lightning.pytorch.trainer.states import RunningStage
-from lightning.pytorch.utilities.parsing import AttributeDict, get_init_args
-import matplotlib.pyplot as plt
+from lightning.pytorch.utilities.parsing import get_init_args
 import numpy as np
-from numpy.lib.function_base import iterable
+from numpy import iterable
 import pandas as pd
-import pytorch_optimizer
-from pytorch_optimizer import Ranger21
 import scipy.stats
 import torch
 import torch.nn as nn
@@ -55,6 +52,7 @@ from pytorch_forecasting.utils import (
     groupby_apply,
     to_list,
 )
+from pytorch_forecasting.utils._dependencies import _check_matplotlib, _get_installed_packages
 
 # todo: compile models
 
@@ -77,23 +75,27 @@ def _torch_cat_na(x: List[torch.Tensor]) -> torch.Tensor:
         max_first_len = max(first_lens)
         if max_first_len > min(first_lens):
             x = [
-                xi
-                if xi.shape[1] == max_first_len
-                else torch.cat(
-                    [
-                        xi,
-                        torch.full(
-                            (xi.shape[0], max_first_len - xi.shape[1], *xi.shape[2:]), float("nan"), device=xi.device
-                        ),
-                    ],
-                    dim=1,
+                (
+                    xi
+                    if xi.shape[1] == max_first_len
+                    else torch.cat(
+                        [
+                            xi,
+                            torch.full(
+                                (xi.shape[0], max_first_len - xi.shape[1], *xi.shape[2:]),
+                                float("nan"),
+                                device=xi.device,
+                            ),
+                        ],
+                        dim=1,
+                    )
                 )
                 for xi in x
             ]
 
     # check if remaining dimensions are all equal
     if x[0].ndim > 2:
-        remaining_dimensions_equal = all([all([xi.size(i) == x[0].size(i) for xi in x]) for i in range(2, x[0].ndim)])
+        remaining_dimensions_equal = all(all(xi.size(i) == x[0].size(i) for xi in x) for i in range(2, x[0].ndim))
     else:
         remaining_dimensions_equal = True
 
@@ -441,9 +443,9 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
         reduce_on_plateau_min_lr: float = 1e-5,
         weight_decay: float = 0.0,
         optimizer_params: Dict[str, Any] = None,
-        monotone_constaints: Dict[str, int] = {},
+        monotone_constaints: Dict[str, int] = None,
         output_transformer: Callable = None,
-        optimizer="Ranger",
+        optimizer=None,
     ):
         """
         BaseModel for timeseries forecasting from which to inherit from
@@ -477,12 +479,46 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
                 or ``pytorch_optimizer``.
                 Alternatively, a class or function can be passed which takes parameters as first argument and
                 a `lr` argument (optionally also `weight_decay`). Defaults to
-                `"ranger" <https://pytorch-optimizers.readthedocs.io/en/latest/optimizer_api.html#ranger21>`_.
+                `"ranger" <https://pytorch-optimizers.readthedocs.io/en/latest/optimizer_api.html#ranger21>`_,
+                if pytorch_optimizer is installed, otherwise "adam".
         """
+        if monotone_constaints is None:
+            monotone_constaints = {}
         super().__init__()
         # update hparams
         frame = inspect.currentframe()
         init_args = get_init_args(frame)
+
+        # TODO 1.2.0: remove warnings and change default optimizer to "adam"
+        if init_args["optimizer"] is None:
+            ptopt_in_env = "pytorch_optimizer" in _get_installed_packages()
+            if ptopt_in_env:
+                init_args["optimizer"] = "ranger"
+                warnings.warn(
+                    "In pytorch-forecasting models, from version 1.2.0, "
+                    "the default optimizer will be 'adam', in order to "
+                    "minimize the number of dependencies in default parameter settings. "
+                    "Users who wish to ensure their code continues using 'ranger' as optimizer "
+                    "should ensure that pytorch_optimizer is installed, and set the optimizer "
+                    "parameter explicitly to 'ranger'.",
+                    stacklevel=2,
+                )
+            else:
+                init_args["optimizer"] = "adam"
+                warnings.warn(
+                    "In pytorch-forecasting models, on versions 1.1.X, "
+                    "the default optimizer defaults to 'adam', "
+                    "if pytorch_optimizer is not installed, "
+                    "otherwise it defaults to 'ranger' from pytorch_optimizer. "
+                    "From version 1.2.0, the default optimizer will be 'adam' "
+                    "regardless of whether pytorch_optimizer is installed, in order to "
+                    "minimize the number of dependencies in default parameter settings. "
+                    "Users who wish to ensure their code continues using 'ranger' as optimizer "
+                    "should ensure that pytorch_optimizer is installed, and set the optimizer "
+                    "parameter explicitly to 'ranger'.",
+                    stacklevel=2,
+                )
+
         self.save_hyperparameters(
             {name: val for name, val in init_args.items() if name not in self.hparams and name not in ["self"]}
         )
@@ -692,8 +728,8 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
         y: Tuple[torch.Tensor, torch.Tensor],
         out: Dict[str, torch.Tensor],
         batch_idx: int,
-        prediction_kwargs: Dict[str, Any] = {},
-        quantiles_kwargs: Dict[str, Any] = {},
+        prediction_kwargs: Optional[Dict[str, Any]] = None,
+        quantiles_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Create the log used in the training and validation step.
@@ -711,6 +747,9 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
         Returns:
             Dict[str, Any]: log dictionary to be returned by training and validation steps
         """
+
+        prediction_kwargs = {} if prediction_kwargs is None else deepcopy(prediction_kwargs)
+        quantiles_kwargs = {} if quantiles_kwargs is None else deepcopy(quantiles_kwargs)
         # log
         if isinstance(self.loss, DistributionLoss):
             prediction_kwargs.setdefault("n_samples", 20)
@@ -793,7 +832,7 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
                 [self.hparams.x_reals.index(name) for name in self.hparams.monotone_constaints.keys()]
             )
             monotonicity = torch.tensor(
-                [val for val in self.hparams.monotone_constaints.values()], dtype=gradient.dtype, device=gradient.device
+                list(self.hparams.monotone_constaints.values()), dtype=gradient.dtype, device=gradient.device
             )
             # add additionl loss if gradient points in wrong direction
             gradient = gradient[..., indices] * monotonicity[None, None]
@@ -972,6 +1011,12 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
                 )
             else:
                 log_indices = [0]
+
+            mpl_available = _check_matplotlib("plot_prediction", raise_error=False)
+
+            if not mpl_available:
+                return None  # don't log matplotlib plots if not available
+
             for idx in log_indices:
                 fig = self.plot_prediction(x, out, idx=idx, add_loss_to_title=True, **kwargs)
                 tag = f"{self.current_stage} prediction"
@@ -1001,9 +1046,9 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
         add_loss_to_title: Union[Metric, torch.Tensor, bool] = False,
         show_future_observed: bool = True,
         ax=None,
-        quantiles_kwargs: Dict[str, Any] = {},
-        prediction_kwargs: Dict[str, Any] = {},
-    ) -> plt.Figure:
+        quantiles_kwargs: Optional[Dict[str, Any]] = None,
+        prediction_kwargs: Optional[Dict[str, Any]] = None,
+    ):
         """
         Plot prediction of prediction vs actuals
 
@@ -1022,6 +1067,15 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
         Returns:
             matplotlib figure
         """
+        if quantiles_kwargs is None:
+            quantiles_kwargs = {}
+        if prediction_kwargs is None:
+            prediction_kwargs = {}
+
+        _check_matplotlib("plot_prediction")
+
+        from matplotlib import pyplot as plt
+
         # all true values for y of the first sample in batch
         encoder_targets = to_list(x["encoder_target"])
         decoder_targets = to_list(x["decoder_target"])
@@ -1135,6 +1189,14 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
                 layers.append(name)
                 ave_grads.append(p.grad.abs().cpu().mean())
                 self.logger.experiment.add_histogram(tag=name, values=p.grad, global_step=self.global_step)
+
+        mpl_available = _check_matplotlib("log_gradient_flow", raise_error=False)
+
+        if not mpl_available:
+            return None
+
+        import matplotlib.pyplot as plt
+
         fig, ax = plt.subplots()
         ax.plot(ave_grads)
         ax.set_xlabel("Layers")
@@ -1164,6 +1226,7 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
         Returns:
             Tuple[List]: first entry is list of optimizers and second is list of schedulers
         """
+        ptopt_in_env = "pytorch_optimizer" in _get_installed_packages()
         # either set a schedule of lrs or find it dynamically
         if self.hparams.optimizer_params is None:
             optimizer_params = {}
@@ -1191,7 +1254,14 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
                 self.parameters(), lr=lr, weight_decay=self.hparams.weight_decay, **optimizer_params
             )
         elif self.hparams.optimizer == "ranger":
-            if any([isinstance(c, LearningRateFinder) for c in self.trainer.callbacks]):
+            if not ptopt_in_env:
+                raise ImportError(
+                    "optimizer 'ranger' requires pytorch_optimizer in the evironment. "
+                    "Please install pytorch_optimizer with `pip install pytorch_optimizer`."
+                )
+            from pytorch_optimizer import Ranger21
+
+            if any(isinstance(c, LearningRateFinder) for c in self.trainer.callbacks):
                 # if finding learning rate, switch off warm up and cool down
                 optimizer_params.setdefault("num_warm_up_iterations", 0)
                 optimizer_params.setdefault("num_warm_down_iterations", 0)
@@ -1217,15 +1287,20 @@ class BaseModel(InitialParameterRepresenterMixIn, LightningModule, TupleOutputMi
                 )
             except TypeError:  # in case there is no weight decay
                 optimizer = getattr(torch.optim, self.hparams.optimizer)(self.parameters(), lr=lr, **optimizer_params)
-        elif hasattr(pytorch_optimizer, self.hparams.optimizer):
-            try:
-                optimizer = getattr(pytorch_optimizer, self.hparams.optimizer)(
-                    self.parameters(), lr=lr, weight_decay=self.hparams.weight_decay, **optimizer_params
-                )
-            except TypeError:  # in case there is no weight decay
-                optimizer = getattr(pytorch_optimizer, self.hparams.optimizer)(
-                    self.parameters(), lr=lr, **optimizer_params
-                )
+        elif ptopt_in_env:
+            import pytorch_optimizer
+
+            if hasattr(pytorch_optimizer, self.hparams.optimizer):
+                try:
+                    optimizer = getattr(pytorch_optimizer, self.hparams.optimizer)(
+                        self.parameters(), lr=lr, weight_decay=self.hparams.weight_decay, **optimizer_params
+                    )
+                except TypeError:  # in case there is no weight decay
+                    optimizer = getattr(pytorch_optimizer, self.hparams.optimizer)(
+                        self.parameters(), lr=lr, **optimizer_params
+                    )
+            else:
+                raise ValueError(f"Optimizer of self.hparams.optimizer={self.hparams.optimizer} unknown")
         else:
             raise ValueError(f"Optimizer of self.hparams.optimizer={self.hparams.optimizer} unknown")
 
@@ -1673,43 +1748,45 @@ class BaseModelWithCovariates(BaseModel):
         # assert fixed encoder and decoder length for the moment
         if allowed_encoder_known_variable_names is None:
             allowed_encoder_known_variable_names = (
-                dataset.time_varying_known_categoricals + dataset.time_varying_known_reals
+                dataset._time_varying_known_categoricals + dataset._time_varying_known_reals
             )
 
         # embeddings
         embedding_labels = {
             name: encoder.classes_
-            for name, encoder in dataset.categorical_encoders.items()
+            for name, encoder in dataset._categorical_encoders.items()
             if name in dataset.categoricals
         }
         embedding_paddings = dataset.dropout_categoricals
         # determine embedding sizes based on heuristic
         embedding_sizes = {
             name: (len(encoder.classes_), get_embedding_size(len(encoder.classes_)))
-            for name, encoder in dataset.categorical_encoders.items()
+            for name, encoder in dataset._categorical_encoders.items()
             if name in dataset.categoricals
         }
         embedding_sizes.update(kwargs.get("embedding_sizes", {}))
         kwargs.setdefault("embedding_sizes", embedding_sizes)
 
         new_kwargs = dict(
-            static_categoricals=dataset.static_categoricals,
+            static_categoricals=dataset._static_categoricals,
             time_varying_categoricals_encoder=[
-                name for name in dataset.time_varying_known_categoricals if name in allowed_encoder_known_variable_names
+                name
+                for name in dataset._time_varying_known_categoricals
+                if name in allowed_encoder_known_variable_names
             ]
-            + dataset.time_varying_unknown_categoricals,
-            time_varying_categoricals_decoder=dataset.time_varying_known_categoricals,
-            static_reals=dataset.static_reals,
+            + dataset._time_varying_unknown_categoricals,
+            time_varying_categoricals_decoder=dataset._time_varying_known_categoricals,
+            static_reals=dataset._static_reals,
             time_varying_reals_encoder=[
-                name for name in dataset.time_varying_known_reals if name in allowed_encoder_known_variable_names
+                name for name in dataset._time_varying_known_reals if name in allowed_encoder_known_variable_names
             ]
-            + dataset.time_varying_unknown_reals,
-            time_varying_reals_decoder=dataset.time_varying_known_reals,
+            + dataset._time_varying_unknown_reals,
+            time_varying_reals_decoder=dataset._time_varying_known_reals,
             x_reals=dataset.reals,
             x_categoricals=dataset.flat_categoricals,
             embedding_labels=embedding_labels,
             embedding_paddings=embedding_paddings,
-            categorical_groups=dataset.variable_groups,
+            categorical_groups=dataset._variable_groups,
         )
         new_kwargs.update(kwargs)
         return super().from_dataset(dataset, **new_kwargs)
@@ -1876,7 +1953,7 @@ class BaseModelWithCovariates(BaseModel):
 
     def plot_prediction_actual_by_variable(
         self, data: Dict[str, Dict[str, torch.Tensor]], name: str = None, ax=None, log_scale: bool = None
-    ) -> Union[Dict[str, plt.Figure], plt.Figure]:
+    ):
         """
         Plot predicions and actual averages by variables
 
@@ -1894,6 +1971,10 @@ class BaseModelWithCovariates(BaseModel):
         Returns:
             Union[Dict[str, plt.Figure], plt.Figure]: matplotlib figure
         """
+        _check_matplotlib("plot_prediction_actual_by_variable")
+
+        from matplotlib import pyplot as plt
+
         if name is None:  # run recursion for figures
             figs = {name: self.plot_prediction_actual_by_variable(data, name) for name in data["support"].keys()}
             return figs
@@ -2028,7 +2109,7 @@ class AutoRegressiveBaseModel(BaseModel):
         """
         kwargs.setdefault("target", dataset.target)
         # check that lags for targets are the same
-        lags = {name: lag for name, lag in dataset.lags.items() if name in dataset.target_names}  # filter for targets
+        lags = {name: lag for name, lag in dataset._lags.items() if name in dataset.target_names}  # filter for targets
         target0 = dataset.target_names[0]
         lag = set(lags.get(target0, []))
         for target in dataset.target_names:
@@ -2262,9 +2343,9 @@ class AutoRegressiveBaseModel(BaseModel):
         add_loss_to_title: Union[Metric, torch.Tensor, bool] = False,
         show_future_observed: bool = True,
         ax=None,
-        quantiles_kwargs: Dict[str, Any] = {},
-        prediction_kwargs: Dict[str, Any] = {},
-    ) -> plt.Figure:
+        quantiles_kwargs: Optional[Dict[str, Any]] = None,
+        prediction_kwargs: Optional[Dict[str, Any]] = None,
+    ):
         """
         Plot prediction of prediction vs actuals
 
@@ -2283,6 +2364,9 @@ class AutoRegressiveBaseModel(BaseModel):
         Returns:
             matplotlib figure
         """
+
+        prediction_kwargs = {} if prediction_kwargs is None else deepcopy(prediction_kwargs)
+        quantiles_kwargs = {} if quantiles_kwargs is None else deepcopy(quantiles_kwargs)
 
         # get predictions
         if isinstance(self.loss, DistributionLoss):

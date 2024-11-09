@@ -1,5 +1,6 @@
 """Point metrics for forecasting a single point per time step."""
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+from typing import Dict, List
 
 import scipy.stats
 import torch
@@ -7,7 +8,7 @@ import torch.nn.functional as F
 from torch.nn.utils import rnn
 
 from pytorch_forecasting.metrics.base_metrics import MultiHorizonMetric
-from pytorch_forecasting.utils import create_mask, unpack_sequence, unsqueeze_like
+from pytorch_forecasting.utils import unpack_sequence
 
 
 class PoissonLoss(MultiHorizonMetric):
@@ -210,7 +211,8 @@ class MASE(MultiHorizonMetric):
     def loss(self, y_pred, target, scaling):
         return (self.to_prediction(y_pred) - target).abs() / scaling.unsqueeze(-1)
 
-    def calculate_scaling(self, target, lengths, encoder_target, encoder_lengths):
+    @staticmethod
+    def calculate_scaling(target, lengths, encoder_target, encoder_lengths):
         # calcualte mean(abs(diff(targets)))
         eps = 1e-6
         batch_size = target.size(0)

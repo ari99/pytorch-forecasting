@@ -1,18 +1,17 @@
 """
 The temporal fusion transformer is a powerful predictive model for forecasting timeseries
 """
-from copy import copy
-from typing import Dict, List, Tuple, Union
 
-from matplotlib import pyplot as plt
+from copy import copy
+from typing import Dict, List, Tuple, Union, Optional
+
 import numpy as np
 import torch
 from torch import nn
 from torchmetrics import Metric as LightningMetric
 
 from pytorch_forecasting.data import TimeSeriesDataSet
-from pytorch_forecasting.data.encoders import NaNLabelEncoder
-from pytorch_forecasting.metrics import MAE, MAPE, MASE, RMSE, SMAPE, MultiHorizonMetric, MultiLoss, QuantileLoss
+from pytorch_forecasting.metrics import MAE, MAPE, RMSE, SMAPE, MultiHorizonMetric, QuantileLoss
 from pytorch_forecasting.models.base_model import BaseModelWithCovariates
 from pytorch_forecasting.models.nn import LSTM, MultiEmbedding
 from pytorch_forecasting.models.temporal_fusion_transformer.sub_modules import (
@@ -24,6 +23,7 @@ from pytorch_forecasting.models.temporal_fusion_transformer.sub_modules import (
     VariableSelectionNetwork,
 )
 from pytorch_forecasting.utils import create_mask, detach, integer_histogram, masked_op, padded_stack, to_list
+from pytorch_forecasting.utils._dependencies import _check_matplotlib
 
 
 class TemporalFusionTransformer(BaseModelWithCovariates):
@@ -36,26 +36,26 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
         loss: MultiHorizonMetric = None,
         attention_head_size: int = 4,
         max_encoder_length: int = 10,
-        static_categoricals: List[str] = [],
-        static_reals: List[str] = [],
-        time_varying_categoricals_encoder: List[str] = [],
-        time_varying_categoricals_decoder: List[str] = [],
-        categorical_groups: Dict[str, List[str]] = {},
-        time_varying_reals_encoder: List[str] = [],
-        time_varying_reals_decoder: List[str] = [],
-        x_reals: List[str] = [],
-        x_categoricals: List[str] = [],
+        static_categoricals: Optional[List[str]] = None,
+        static_reals: Optional[List[str]] = None,
+        time_varying_categoricals_encoder: Optional[List[str]] = None,
+        time_varying_categoricals_decoder: Optional[List[str]] = None,
+        categorical_groups: Optional[Union[Dict, List[str]]] = None,
+        time_varying_reals_encoder: Optional[List[str]] = None,
+        time_varying_reals_decoder: Optional[List[str]] = None,
+        x_reals: Optional[List[str]] = None,
+        x_categoricals: Optional[List[str]] = None,
         hidden_continuous_size: int = 8,
-        hidden_continuous_sizes: Dict[str, int] = {},
-        embedding_sizes: Dict[str, Tuple[int, int]] = {},
-        embedding_paddings: List[str] = [],
-        embedding_labels: Dict[str, np.ndarray] = {},
+        hidden_continuous_sizes: Optional[Dict[str, int]] = None,
+        embedding_sizes: Optional[Dict[str, Tuple[int, int]]] = None,
+        embedding_paddings: Optional[List[str]] = None,
+        embedding_labels: Optional[Dict[str, np.ndarray]] = None,
         learning_rate: float = 1e-3,
         log_interval: Union[int, float] = -1,
         log_val_interval: Union[int, float] = None,
         log_gradient_flow: bool = False,
         reduce_on_plateau_patience: int = 1000,
-        monotone_constaints: Dict[str, int] = {},
+        monotone_constaints: Optional[Dict[str, int]] = None,
         share_single_variable_networks: bool = False,
         causal_attention: bool = True,
         logging_metrics: nn.ModuleList = None,
@@ -133,6 +133,34 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
                 Defaults to nn.ModuleList([SMAPE(), MAE(), RMSE(), MAPE()]).
             **kwargs: additional arguments to :py:class:`~BaseModel`.
         """
+        if monotone_constaints is None:
+            monotone_constaints = {}
+        if embedding_labels is None:
+            embedding_labels = {}
+        if embedding_paddings is None:
+            embedding_paddings = []
+        if embedding_sizes is None:
+            embedding_sizes = {}
+        if hidden_continuous_sizes is None:
+            hidden_continuous_sizes = {}
+        if x_categoricals is None:
+            x_categoricals = []
+        if x_reals is None:
+            x_reals = []
+        if time_varying_reals_decoder is None:
+            time_varying_reals_decoder = []
+        if time_varying_reals_encoder is None:
+            time_varying_reals_encoder = []
+        if categorical_groups is None:
+            categorical_groups = {}
+        if time_varying_categoricals_decoder is None:
+            time_varying_categoricals_decoder = []
+        if time_varying_categoricals_encoder is None:
+            time_varying_categoricals_encoder = []
+        if static_reals is None:
+            static_reals = []
+        if static_categoricals is None:
+            static_categoricals = []
         if logging_metrics is None:
             logging_metrics = nn.ModuleList([SMAPE(), MAE(), RMSE(), MAPE()])
         if loss is None:
@@ -226,9 +254,9 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
             dropout=self.hparams.dropout,
             context_size=self.hparams.hidden_size,
             prescalers=self.prescalers,
-            single_variable_grns={}
-            if not self.hparams.share_single_variable_networks
-            else self.shared_single_variable_grns,
+            single_variable_grns=(
+                {} if not self.hparams.share_single_variable_networks else self.shared_single_variable_grns
+            ),
         )
 
         self.decoder_variable_selection = VariableSelectionNetwork(
@@ -238,9 +266,9 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
             dropout=self.hparams.dropout,
             context_size=self.hparams.hidden_size,
             prescalers=self.prescalers,
-            single_variable_grns={}
-            if not self.hparams.share_single_variable_networks
-            else self.shared_single_variable_grns,
+            single_variable_grns=(
+                {} if not self.hparams.share_single_variable_networks else self.shared_single_variable_grns
+            ),
         )
 
         # static encoders
@@ -606,7 +634,7 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
                 - shifts[:, None, None, None]
             ) % encoder_attention.size(3)
             encoder_attention = torch.gather(encoder_attention, dim=3, index=new_index)
-            # expand encoder_attentiont to full size
+            # expand encoder_attention to full size
             if encoder_attention.size(-1) < self.hparams.max_encoder_length:
                 encoder_attention = torch.concat(
                     [
@@ -690,7 +718,7 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
         show_future_observed: bool = True,
         ax=None,
         **kwargs,
-    ) -> plt.Figure:
+    ):
         """
         Plot actuals vs prediction and attention
 
@@ -706,7 +734,6 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
         Returns:
             plt.Figure: matplotlib figure
         """
-
         # plot prediction as normal
         fig = super().plot_prediction(
             x,
@@ -735,7 +762,7 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
                 f.tight_layout()
         return fig
 
-    def plot_interpretation(self, interpretation: Dict[str, torch.Tensor]) -> Dict[str, plt.Figure]:
+    def plot_interpretation(self, interpretation: Dict[str, torch.Tensor]):
         """
         Make figures that interpret model.
 
@@ -748,6 +775,10 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
         Returns:
             dictionary of matplotlib figures
         """
+        _check_matplotlib("plot_interpretation")
+
+        import matplotlib.pyplot as plt
+
         figs = {}
 
         # attention
@@ -812,6 +843,13 @@ class TemporalFusionTransformer(BaseModelWithCovariates):
         )
         interpretation["attention"] = interpretation["attention"] / attention_occurances.pow(2).clamp(1.0)
         interpretation["attention"] = interpretation["attention"] / interpretation["attention"].sum()
+
+        mpl_available = _check_matplotlib("log_interpretation", raise_error=False)
+
+        if not mpl_available:
+            return None
+
+        import matplotlib.pyplot as plt
 
         figs = self.plot_interpretation(interpretation)  # make interpretation figures
         label = self.current_stage

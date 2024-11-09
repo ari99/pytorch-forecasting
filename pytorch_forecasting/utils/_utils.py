@@ -1,6 +1,7 @@
 """
 Helper functions for PyTorch forecasting
 """
+
 from collections import namedtuple
 from contextlib import redirect_stdout
 import inspect
@@ -428,7 +429,14 @@ def move_to_device(
         x on targeted device
     """
     if isinstance(device, str):
-        device = torch.device(device)
+        if device == "mps":
+            if hasattr(torch.backends, device):
+                if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+                    device = torch.device("mps")
+                else:
+                    device = torch.device("cpu")
+        else:
+            device = torch.device(device)
     if isinstance(x, dict):
         for name in x.keys():
             x[name] = move_to_device(x[name], device=device)
@@ -506,7 +514,7 @@ def repr_class(
     obj,
     attributes: Union[List[str], Dict[str, Any]],
     max_characters_before_break: int = 100,
-    extra_attributes: Dict[str, Any] = {},
+    extra_attributes: Dict[str, Any] = None,
 ) -> str:
     """Print class name and parameters.
 
@@ -519,6 +527,8 @@ def repr_class(
     Returns:
         str
     """
+    if extra_attributes is None:
+        extra_attributes = {}
     # get attributes
     if isinstance(attributes, (tuple, list)):
         attributes = {name: getattr(obj, name) for name in attributes if hasattr(obj, name)}

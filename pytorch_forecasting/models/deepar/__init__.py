@@ -3,7 +3,8 @@
 <https://www.sciencedirect.com/science/article/pii/S0169207019301888>`_
 which is the one of the most popular forecasting algorithms and is often used as a baseline
 """
-from copy import copy, deepcopy
+
+from copy import deepcopy
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -12,7 +13,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data.dataloader import DataLoader
 
-from pytorch_forecasting.data.encoders import EncoderNormalizer, MultiNormalizer, NaNLabelEncoder
+from pytorch_forecasting.data.encoders import MultiNormalizer, NaNLabelEncoder
 from pytorch_forecasting.data.timeseries import TimeSeriesDataSet
 from pytorch_forecasting.metrics import (
     MAE,
@@ -21,7 +22,6 @@ from pytorch_forecasting.metrics import (
     RMSE,
     SMAPE,
     DistributionLoss,
-    Metric,
     MultiLoss,
     MultivariateDistributionLoss,
     NormalDistributionLoss,
@@ -38,22 +38,22 @@ class DeepAR(AutoRegressiveBaseModelWithCovariates):
         hidden_size: int = 10,
         rnn_layers: int = 2,
         dropout: float = 0.1,
-        static_categoricals: List[str] = [],
-        static_reals: List[str] = [],
-        time_varying_categoricals_encoder: List[str] = [],
-        time_varying_categoricals_decoder: List[str] = [],
-        categorical_groups: Dict[str, List[str]] = {},
-        time_varying_reals_encoder: List[str] = [],
-        time_varying_reals_decoder: List[str] = [],
-        embedding_sizes: Dict[str, Tuple[int, int]] = {},
-        embedding_paddings: List[str] = [],
-        embedding_labels: Dict[str, np.ndarray] = {},
-        x_reals: List[str] = [],
-        x_categoricals: List[str] = [],
+        static_categoricals: Optional[List[str]] = None,
+        static_reals: Optional[List[str]] = None,
+        time_varying_categoricals_encoder: Optional[List[str]] = None,
+        time_varying_categoricals_decoder: Optional[List[str]] = None,
+        categorical_groups: Optional[Dict[str, List[str]]] = None,
+        time_varying_reals_encoder: Optional[List[str]] = None,
+        time_varying_reals_decoder: Optional[List[str]] = None,
+        embedding_sizes: Optional[Dict[str, Tuple[int, int]]] = None,
+        embedding_paddings: Optional[List[str]] = None,
+        embedding_labels: Optional[Dict[str, np.ndarray]] = None,
+        x_reals: Optional[List[str]] = None,
+        x_categoricals: Optional[List[str]] = None,
         n_validation_samples: int = None,
         n_plotting_samples: int = None,
         target: Union[str, List[str]] = None,
-        target_lags: Dict[str, List[int]] = {},
+        target_lags: Optional[Dict[str, List[int]]] = None,
         loss: DistributionLoss = None,
         logging_metrics: nn.ModuleList = None,
         **kwargs,
@@ -115,6 +115,32 @@ class DeepAR(AutoRegressiveBaseModelWithCovariates):
                 n_plotting_samples = n_validation_samples
             else:
                 n_plotting_samples = 100
+        if static_categoricals is None:
+            static_categoricals = []
+        if static_reals is None:
+            static_reals = []
+        if time_varying_categoricals_encoder is None:
+            time_varying_categoricals_encoder = []
+        if time_varying_categoricals_decoder is None:
+            time_varying_categoricals_decoder = []
+        if categorical_groups is None:
+            categorical_groups = {}
+        if time_varying_reals_encoder is None:
+            time_varying_reals_encoder = []
+        if time_varying_reals_decoder is None:
+            time_varying_reals_decoder = []
+        if embedding_sizes is None:
+            embedding_sizes = {}
+        if embedding_paddings is None:
+            embedding_paddings = []
+        if embedding_labels is None:
+            embedding_labels = {}
+        if x_reals is None:
+            x_reals = []
+        if x_categoricals is None:
+            x_categoricals = []
+        if target_lags is None:
+            target_lags = {}
         self.save_hyperparameters()
         # store loss function separately as it is a module
         super().__init__(loss=loss, logging_metrics=logging_metrics, **kwargs)
@@ -182,7 +208,7 @@ class DeepAR(AutoRegressiveBaseModelWithCovariates):
         new_kwargs.update(kwargs)
         assert not isinstance(dataset.target_normalizer, NaNLabelEncoder) and (
             not isinstance(dataset.target_normalizer, MultiNormalizer)
-            or all([not isinstance(normalizer, NaNLabelEncoder) for normalizer in dataset.target_normalizer])
+            or all(not isinstance(normalizer, NaNLabelEncoder) for normalizer in dataset.target_normalizer)
         ), "target(s) should be continuous - categorical targets are not supported"  # todo: remove this restriction
         if isinstance(new_kwargs.get("loss", None), MultivariateDistributionLoss):
             assert (
@@ -204,7 +230,7 @@ class DeepAR(AutoRegressiveBaseModelWithCovariates):
         # create input vector
         if len(self.categoricals) > 0:
             embeddings = self.embeddings(x_cat)
-            flat_embeddings = torch.cat([emb for emb in embeddings.values()], dim=-1)
+            flat_embeddings = torch.cat(list(embeddings.values()), dim=-1)
             input_vector = flat_embeddings
 
         if len(self.reals) > 0:

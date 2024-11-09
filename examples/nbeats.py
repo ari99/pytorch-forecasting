@@ -2,9 +2,7 @@ import sys
 
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import EarlyStopping
-from lightning.pytorch.tuner import Tuner
 import pandas as pd
-from sklearn.preprocessing import scale
 
 from pytorch_forecasting import NBeats, TimeSeriesDataSet
 from pytorch_forecasting.data import NaNLabelEncoder
@@ -65,10 +63,10 @@ if __name__ == "__main__":
     )
 
 
-    net = NBeats.from_dataset(
-        training, learning_rate=3e-2, log_interval=10, log_val_interval=1, log_gradient_flow=False, weight_decay=1e-2
-    )
-    print(f"Number of parameters in network: {net.size()/1e3:.1f}k")
+net = NBeats.from_dataset(
+    training, learning_rate=3e-2, log_interval=10, log_val_interval=1, log_gradient_flow=False, weight_decay=1e-2
+)
+print(f"Number of parameters in network: {net.size() / 1e3:.1f}k")
 
     # # find optimal learning rate
     # # remove logging and artificial epoch size
